@@ -19,11 +19,8 @@ st.set_page_config(
 # ==============================================================================
 
 def to_excel(df):
-    """
-    Converte o DataFrame para bytes Excel usando openpyxl.
-    """
+    """Converte DataFrame para Excel em memória usando openpyxl."""
     output = BytesIO()
-    # Engine alterada para 'openpyxl' conforme requisitos
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Relatorio')
     processed_data = output.getvalue()
@@ -54,20 +51,17 @@ def verificar_cancelamento_excel(valor):
 
 @st.cache_data(show_spinner=False, ttl=300)
 def buscar_dados_sql(data_inicio, data_fim, empresa_id, puxar_todas):
-    # CARREGAR SEGREDOS DO STREAMLIT
     try:
         db = st.secrets["uau_db"]
         raw_query = st.secrets["sql_queries"]["query_conferencia"]
-        
         conn_str = f"DRIVER={db['DRIVER']};SERVER={db['SERVER']};DATABASE={db['DATABASE']};UID={db['UID']};PWD={db['PWD']}"
     except Exception as e:
-        st.error("Erro ao carregar configurações de segurança (Secrets). Verifique o painel do Streamlit.")
+        st.error("Erro ao carregar configurações de segurança (Secrets).")
         return pd.DataFrame()
 
     d_ini = data_inicio.strftime('%Y-%m-%d')
     d_fim = data_fim.strftime('%Y-%m-%d')
 
-    # Configuração dos filtros dinâmicos
     if puxar_todas:
         filtro_empresa_nf = "1=1"
         filtro_empresa_end = "1=1"
@@ -75,76 +69,64 @@ def buscar_dados_sql(data_inicio, data_fim, empresa_id, puxar_todas):
         filtro_empresa_nf = f"NotasFiscais.Empresa_nf = {empresa_id}"
         filtro_empresa_end = f"NotaFiscalEndereco.Empresa_NfEnd = {empresa_id}"
 
-    # INJEÇÃO DOS FILTROS NA QUERY
     try:
         query = raw_query.format(
-            d_ini=d_ini,
-            d_fim=d_fim,
+            d_ini=d_ini, d_fim=d_fim,
             filtro_empresa_nf=filtro_empresa_nf,
             filtro_empresa_end=filtro_empresa_end
         )
     except Exception as e:
-        st.error(f"Erro ao formatar a query: {e}")
+        st.error(f"Erro ao formatar query: {e}")
         return pd.DataFrame()
     
-    # Execução
     try:
         conn = pyodbc.connect(conn_str)
         df = pd.read_sql(query, conn)
         conn.close()
         return df
     except Exception as e:
-        st.error(f"❌ Não foi possível conectar ao Sistema UAU: {e}")
+        st.error(f"❌ Erro SQL: {e}")
         return pd.DataFrame()
 
 # ==============================================================================
 # 3. LAYOUT E INTERFACE
 # ==============================================================================
 
-# Cabeçalho Principal
 st.markdown("<h1 style='text-align: center; color: #FFFFFF;'>Conferência de Notas Fiscais 2025</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #BDC3C7; margin-bottom: 30px;'>Sistema automático de comparação: <b>UAU</b> vs <b>Planilha de Controle</b>.</p>", unsafe_allow_html=True)
 
-# Container 1: Configuração dos Filtros
+# Container 1: Filtros
 with st.container(border=True):
     st.markdown("##### 🛠️ Configuração da Busca")
-    
     col_dates, col_company = st.columns([2, 1])
-    
     with col_dates:
         c1, c2 = st.columns(2)
-        with c1:
-            dt_inicio = st.date_input("📅 Data Inicial", value=datetime(2025, 1, 1))
-        with c2:
-            dt_fim = st.date_input("📅 Data Final", value=datetime.today())
-            
+        with c1: dt_inicio = st.date_input("📅 Data Inicial", value=datetime(2025, 1, 1))
+        with c2: dt_fim = st.date_input("📅 Data Final", value=datetime.today())
     with col_company:
         empresa_id = st.number_input("🏢 Cód. Empresa", min_value=1, value=1)
-        todas_empresas = st.checkbox("Todas Empresas", help="Ignora o código e busca todas as empresas")
+        todas_empresas = st.checkbox("Todas Empresas", help="Ignora o código")
 
-        if todas_empresas:
-            st.caption("⚠️ O código acima será ignorado.")
-
-# Container 2: Upload do Arquivo
+# Container 2: Upload
 with st.container(border=True):
     st.markdown("##### 📂 Arquivo de Comparação")
-    uploaded_file = st.file_uploader("Arraste sua planilha Excel (.xlsx) ou CSV aqui", type=["xlsx", "csv"], help="Certifique-se que a planilha tem as colunas 'Nº NF', 'DATA NF' e 'VALOR NF'")
+    uploaded_file = st.file_uploader("Arraste sua planilha aqui", type=["xlsx", "csv"])
 
-# Botão de Ação
+# Botão de Ação (Reseta o estado se clicado novamente)
 st.write("")
 col_vazia_esq, col_btn, col_vazia_dir = st.columns([1, 1, 1])
 with col_btn:
     btn_run = st.button("🚀 INICIAR CONFERÊNCIA", type="primary", use_container_width=True)
 
+# ==============================================================================
+# 4. PROCESSAMENTO (COM SESSION STATE)
+# ==============================================================================
 
-# ==============================================================================
-# 4. EXECUÇÃO
-# ==============================================================================
+# Se o usuário clicar no botão, rodamos o processamento e salvamos no session_state
 if btn_run:
     if not uploaded_file:
         st.warning("⚠️ Por favor, anexe a planilha antes de clicar no botão.")
     else:
-        st.write("")
         status_bar = st.status("🔍 Iniciando conferência...", expanded=True)
         
         # 1. Busca SQL
@@ -174,7 +156,7 @@ if btn_run:
 
         status_bar.write("⚙️ Cruzando informações...")
         
-        # 3. Processamento das Chaves
+        # 3. Tratamento
         if not df_sql.empty:
             df_sql['CHAVE'] = df_sql['NumNfAux_nf'].apply(extrair_numero_nota_sql)
             df_sql['CANCELADO_SISTEMA'] = df_sql['Status_nf'] == 1
@@ -183,7 +165,7 @@ if btn_run:
 
         if 'Nº NF' not in df_excel.columns:
             status_bar.update(label="Erro: Coluna não encontrada", state="error")
-            st.error("A coluna 'Nº NF' não existe na planilha. Verifique o arquivo.")
+            st.error("A coluna 'Nº NF' não existe na planilha.")
             st.stop()
             
         df_excel['CHAVE'] = df_excel['Nº NF'].apply(extrair_numero_nota_excel)
@@ -203,93 +185,79 @@ if btn_run:
             on='CHAVE', how='inner'
         )
         df_status_errado = df_comum[df_comum['CANCELADO_SISTEMA'] != df_comum['CANCELADO_PLANILHA']]
+        
+        # SALVANDO NO SESSION STATE PARA NÃO PERDER AO CLICAR NO DOWNLOAD
+        st.session_state['resultado_pronto'] = True
+        st.session_state['df_status_errado'] = df_status_errado
+        
+        # Preparando DataFrames das faltas para salvar também
+        st.session_state['df_falta_uau'] = df_excel[df_excel['CHAVE'].isin(so_na_planilha)] if len(so_na_planilha) > 0 else pd.DataFrame()
+        st.session_state['df_falta_planilha'] = df_sql[df_sql['CHAVE'].isin(so_no_sistema)] if len(so_no_sistema) > 0 else pd.DataFrame()
+        
+        # Salvando contagens
+        st.session_state['count_sistema'] = len(so_no_sistema)
+        st.session_state['count_planilha'] = len(so_na_planilha)
+        st.session_state['count_errado'] = len(df_status_errado)
 
         status_bar.update(label="Concluído com sucesso!", state="complete", expanded=False)
 
-        # ==============================================================================
-        # 5. DASHBOARD E DOWNLOADS
-        # ==============================================================================
-        st.markdown("### 📊 Resultado da Análise")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Faltam na Planilha", f"{len(so_no_sistema)} notas", 
-                      delta="Estão no UAU mas não no Excel", delta_color="inverse")
-            
-        with col2:
-            st.metric("Faltam no Sistema", f"{len(so_na_planilha)} notas", 
-                      delta="Estão no Excel mas não no UAU", delta_color="inverse")
-            
-        with col3:
-            cor_status = "normal" if len(df_status_errado) == 0 else "inverse"
-            st.metric("Status Diferente", f"{len(df_status_errado)} notas", 
-                      delta="Cancelado em um, Ativo no outro", delta_color=cor_status)
+# ==============================================================================
+# 5. DASHBOARD (Lê do Session State)
+# ==============================================================================
 
-        st.markdown("---")
-        
-        tab1, tab2, tab3 = st.tabs(["📝 Relatório: Status Incorreto", "📂 Falta Lançar no UAU", "📉 Falta na Planilha"])
-        
-        # --- TAB 1: Status Incorreto ---
-        with tab1:
-            if not df_status_errado.empty:
-                st.error("Atenção: As notas abaixo estão com status (Cancelado/Ativo) diferentes entre os dois lugares.")
-                
-                # Botão Download
-                col_info, col_dl = st.columns([4,1])
-                with col_dl:
-                    excel_data = to_excel(df_status_errado)
-                    st.download_button(
-                        label="📥 Baixar Excel",
-                        data=excel_data,
-                        file_name='status_incorreto.xlsx',
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        key='dl_1'
-                    )
-                
-                st.dataframe(df_status_errado, use_container_width=True)
-            else:
-                st.success("✅ Tudo certo! Os status de cancelamento batem perfeitamente.")
+# Verificamos se existe resultado pronto na memória
+if st.session_state.get('resultado_pronto'):
+    
+    st.markdown("### 📊 Resultado da Análise")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Faltam na Planilha", f"{st.session_state['count_sistema']} notas", 
+                  delta="Estão no UAU mas não no Excel", delta_color="inverse")
+    with col2:
+        st.metric("Faltam no Sistema", f"{st.session_state['count_planilha']} notas", 
+                  delta="Estão no Excel mas não no UAU", delta_color="inverse")
+    with col3:
+        cor_status = "normal" if st.session_state['count_errado'] == 0 else "inverse"
+        st.metric("Status Diferente", f"{st.session_state['count_errado']} notas", 
+                  delta="Cancelado em um, Ativo no outro", delta_color=cor_status)
 
-        # --- TAB 2: Falta Lançar no UAU ---
-        with tab2:
-            if len(so_na_planilha) > 0:
-                df_missing_uau = df_excel[df_excel['CHAVE'].isin(so_na_planilha)]
-                st.warning("Estas notas estão na sua Planilha, mas o Sistema UAU não encontrou.")
-                
-                # Botão Download
-                col_info, col_dl = st.columns([4,1])
-                with col_dl:
-                    excel_data = to_excel(df_missing_uau)
-                    st.download_button(
-                        label="📥 Baixar Excel",
-                        data=excel_data,
-                        file_name='falta_lancar_no_uau.xlsx',
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        key='dl_2'
-                    )
+    st.markdown("---")
+    
+    tab1, tab2, tab3 = st.tabs(["📝 Relatório: Status Incorreto", "📂 Falta Lançar no UAU", "📉 Falta na Planilha"])
+    
+    # --- TAB 1 ---
+    with tab1:
+        df1 = st.session_state['df_status_errado']
+        if not df1.empty:
+            st.error("Atenção: Status divergentes.")
+            c_info, c_dl = st.columns([4,1])
+            with c_dl:
+                st.download_button("📥 Baixar Excel", to_excel(df1), 'status_incorreto.xlsx', key='dl_1')
+            st.dataframe(df1, use_container_width=True)
+        else:
+            st.success("✅ Tudo certo com os status.")
 
-                st.dataframe(df_missing_uau, use_container_width=True)
-            else:
-                st.success("✅ Tudo certo! Todas as notas da planilha estão no sistema.")
+    # --- TAB 2 ---
+    with tab2:
+        df2 = st.session_state['df_falta_uau']
+        if not df2.empty:
+            st.warning("Notas na planilha, mas não no UAU.")
+            c_info, c_dl = st.columns([4,1])
+            with c_dl:
+                st.download_button("📥 Baixar Excel", to_excel(df2), 'falta_lancar_no_uau.xlsx', key='dl_2')
+            st.dataframe(df2, use_container_width=True)
+        else:
+            st.success("✅ Todas as notas da planilha estão no sistema.")
 
-        # --- TAB 3: Falta na Planilha ---
-        with tab3:
-            if len(so_no_sistema) > 0:
-                df_missing_planilha = df_sql[df_sql['CHAVE'].isin(so_no_sistema)]
-                st.info("Estas notas estão no Sistema UAU, mas não constam na sua Planilha.")
-                
-                # Botão Download
-                col_info, col_dl = st.columns([4,1])
-                with col_dl:
-                    excel_data = to_excel(df_missing_planilha)
-                    st.download_button(
-                        label="📥 Baixar Excel",
-                        data=excel_data,
-                        file_name='falta_na_planilha.xlsx',
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        key='dl_3'
-                    )
-
-                st.dataframe(df_missing_planilha, use_container_width=True)
-            else:
-                st.success("✅ Tudo certo! Não há notas sobrando no sistema.")
+    # --- TAB 3 ---
+    with tab3:
+        df3 = st.session_state['df_falta_planilha']
+        if not df3.empty:
+            st.info("Notas no UAU, mas não na planilha.")
+            c_info, c_dl = st.columns([4,1])
+            with c_dl:
+                st.download_button("📥 Baixar Excel", to_excel(df3), 'falta_na_planilha.xlsx', key='dl_3')
+            st.dataframe(df3, use_container_width=True)
+        else:
+            st.success("✅ Não há notas sobrando no sistema.")
