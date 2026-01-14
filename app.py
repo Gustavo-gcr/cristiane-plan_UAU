@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import pyodbc
 from datetime import datetime
+from io import BytesIO
 
 # ==============================================================================
 # 1. CONFIGURAÇÕES DA PÁGINA
@@ -16,6 +17,18 @@ st.set_page_config(
 # ==============================================================================
 # 2. FUNÇÕES (Lógica de Negócio)
 # ==============================================================================
+
+def to_excel(df):
+    """
+    Converte o DataFrame para bytes Excel usando openpyxl.
+    """
+    output = BytesIO()
+    # Engine alterada para 'openpyxl' conforme requisitos
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Relatorio')
+    processed_data = output.getvalue()
+    return processed_data
+
 def extrair_numero_nota_sql(valor):
     try:
         s_val = str(valor).strip()
@@ -62,8 +75,7 @@ def buscar_dados_sql(data_inicio, data_fim, empresa_id, puxar_todas):
         filtro_empresa_nf = f"NotasFiscais.Empresa_nf = {empresa_id}"
         filtro_empresa_end = f"NotaFiscalEndereco.Empresa_NfEnd = {empresa_id}"
 
-    # INJEÇÃO DOS FILTROS NA QUERY QUE VEIO DOS SECRETS
-    # Usamos .format() para substituir os placeholders {d_ini}, {filtro...} que estão no texto do TOML
+    # INJEÇÃO DOS FILTROS NA QUERY
     try:
         query = raw_query.format(
             d_ini=d_ini,
@@ -89,7 +101,7 @@ def buscar_dados_sql(data_inicio, data_fim, empresa_id, puxar_todas):
 # 3. LAYOUT E INTERFACE
 # ==============================================================================
 
-# Cabeçalho Principal (Título Branco para Contraste)
+# Cabeçalho Principal
 st.markdown("<h1 style='text-align: center; color: #FFFFFF;'>Conferência de Notas Fiscais 2025</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #BDC3C7; margin-bottom: 30px;'>Sistema automático de comparação: <b>UAU</b> vs <b>Planilha de Controle</b>.</p>", unsafe_allow_html=True)
 
@@ -135,7 +147,7 @@ if btn_run:
         st.write("")
         status_bar = st.status("🔍 Iniciando conferência...", expanded=True)
         
-        # 1. Busca SQL (Segura)
+        # 1. Busca SQL
         status_bar.write("📡 Conectando ao Sistema UAU...")
         df_sql = buscar_dados_sql(dt_inicio, dt_fim, empresa_id, todas_empresas)
         
@@ -195,7 +207,7 @@ if btn_run:
         status_bar.update(label="Concluído com sucesso!", state="complete", expanded=False)
 
         # ==============================================================================
-        # 5. DASHBOARD
+        # 5. DASHBOARD E DOWNLOADS
         # ==============================================================================
         st.markdown("### 📊 Resultado da Análise")
         col1, col2, col3 = st.columns(3)
@@ -217,23 +229,67 @@ if btn_run:
         
         tab1, tab2, tab3 = st.tabs(["📝 Relatório: Status Incorreto", "📂 Falta Lançar no UAU", "📉 Falta na Planilha"])
         
+        # --- TAB 1: Status Incorreto ---
         with tab1:
             if not df_status_errado.empty:
                 st.error("Atenção: As notas abaixo estão com status (Cancelado/Ativo) diferentes entre os dois lugares.")
+                
+                # Botão Download
+                col_info, col_dl = st.columns([4,1])
+                with col_dl:
+                    excel_data = to_excel(df_status_errado)
+                    st.download_button(
+                        label="📥 Baixar Excel",
+                        data=excel_data,
+                        file_name='status_incorreto.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        key='dl_1'
+                    )
+                
                 st.dataframe(df_status_errado, use_container_width=True)
             else:
                 st.success("✅ Tudo certo! Os status de cancelamento batem perfeitamente.")
 
+        # --- TAB 2: Falta Lançar no UAU ---
         with tab2:
             if len(so_na_planilha) > 0:
+                df_missing_uau = df_excel[df_excel['CHAVE'].isin(so_na_planilha)]
                 st.warning("Estas notas estão na sua Planilha, mas o Sistema UAU não encontrou.")
-                st.dataframe(df_excel[df_excel['CHAVE'].isin(so_na_planilha)], use_container_width=True)
+                
+                # Botão Download
+                col_info, col_dl = st.columns([4,1])
+                with col_dl:
+                    excel_data = to_excel(df_missing_uau)
+                    st.download_button(
+                        label="📥 Baixar Excel",
+                        data=excel_data,
+                        file_name='falta_lancar_no_uau.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        key='dl_2'
+                    )
+
+                st.dataframe(df_missing_uau, use_container_width=True)
             else:
                 st.success("✅ Tudo certo! Todas as notas da planilha estão no sistema.")
 
+        # --- TAB 3: Falta na Planilha ---
         with tab3:
             if len(so_no_sistema) > 0:
+                df_missing_planilha = df_sql[df_sql['CHAVE'].isin(so_no_sistema)]
                 st.info("Estas notas estão no Sistema UAU, mas não constam na sua Planilha.")
-                st.dataframe(df_sql[df_sql['CHAVE'].isin(so_no_sistema)], use_container_width=True)
+                
+                # Botão Download
+                col_info, col_dl = st.columns([4,1])
+                with col_dl:
+                    excel_data = to_excel(df_missing_planilha)
+                    st.download_button(
+                        label="📥 Baixar Excel",
+                        data=excel_data,
+                        file_name='falta_na_planilha.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        key='dl_3'
+                    )
+
+                st.dataframe(df_missing_planilha, use_container_width=True)
             else:
                 st.success("✅ Tudo certo! Não há notas sobrando no sistema.")
